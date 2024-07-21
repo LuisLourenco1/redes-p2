@@ -70,10 +70,11 @@ class Conexao:
 
     def _timeout(self):
         self.timeout_interval *= 2
-        for segmento, endereco in self.enviados.values():
+        for seq_no, (segmento, endereco, _) in self.enviados.items():
             self.servidor.rede.enviar(segmento, endereco)
         self._iniciar_timer()
-        self.cwnd = max(MSS, self.cwnd // 2)
+        self.ssthresh = self.cwnd // 2
+        self.cwnd = MSS
 
     def _atualizar_rtt(self, sample_rtt):
         if self.estimated_rtt is None:
@@ -91,11 +92,14 @@ class Conexao:
             if self.timer:
                 self.timer.cancel()
                 self.timer = None
-            if self.seq_no in self.enviados:
-                sample_rtt = time.time() - self.enviados[self.seq_no][2]
+            if ack_no in self.enviados:
+                sample_rtt = time.time() - self.enviados[ack_no][2]
                 self._atualizar_rtt(sample_rtt)
-                del self.enviados[self.seq_no]
-            self.cwnd = min(self.cwnd + MSS, self.ssthresh) if self.cwnd < self.ssthresh else self.cwnd + MSS * (MSS / self.cwnd)
+                del self.enviados[ack_no]
+            if self.cwnd < self.ssthresh:
+                self.cwnd += MSS
+            else:
+                self.cwnd += MSS * MSS // self.cwnd
         if (flags & FLAGS_FIN | FLAGS_ACK) == FLAGS_FIN | FLAGS_ACK:
             self.seq_no_esperado += 1
         elif seq_no == self.seq_no_esperado and len(payload) > 0:
@@ -110,7 +114,7 @@ class Conexao:
 
     def enviar(self, dados):
         self.dados_total.append(dados)
-        while len(dados) > 0:
+        while len(dados) > 0 and len(self.enviados) < self.cwnd // MSS:
             payload = dados[:MSS]
             dados = dados[MSS:]
             src_addr, src_port, dst_addr, dst_port = self.id_conexao
